@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لعبة XO أونلاين - تحدي الـ 3 قطع</title>
+    <!-- استدعاء مكتبة Firebase -->
+    <script src="https://gstatic.com"></script>
+    <script src="https://gstatic.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f2f5; padding: 20px; }
+        .status { margin-bottom: 15px; font-size: 1.2rem; font-weight: bold; color: #333; }
+        .board { display: grid; grid-template-columns: repeat(3, 100px); grid-template-rows: repeat(3, 100px); gap: 10px; background-color: #2c3e50; padding: 10px; border-radius: 12px; }
+        .cell { width: 100px; height: 100px; background-color: #fff; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; cursor: pointer; transition: 0.2s; }
+        .cell.selected { background-color: #fff59d; border: 3px solid #f1c40f; }
+        .player-x { color: #e74c3c; }
+        .player-o { color: #3498db; }
+        .room-info { margin-top: 20px; background: white; padding: 10px; border-radius: 8px; font-size: 0.9rem; border: 1px solid #ccc; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div id="playerTag" style="margin-bottom: 10px; color: #666;">جاري الاتصال...</div>
+    <div class="status" id="status">انتظر دخول المنافس...</div>
+
+    <div class="board" id="board"></div>
+
+    <div class="room-info">
+        <p>أرسل رابط الصفحة لصديقك ليلعب معك</p>
+        <small id="roomID"></small>
+    </div>
+
+    <script>
+        // --- إعدادات Firebase (نسخة تجريبية عامة للتعلم) ---
+        const firebaseConfig = {
+            databaseURL: "https://firebaseio.com" 
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // إنشاء معرف غرفة فريد بناءً على الرابط
+        let roomName = new URLSearchParams(window.location.search).get('room');
+        if (!roomName) {
+            roomName = 'room_' + Math.random().toString(36).substr(2, 9);
+            window.history.pushState({}, '', '?room=' + roomName);
+        }
+        document.getElementById('roomID').innerText = "معرف الغرفة: " + roomName;
+
+        const roomRef = db.ref('rooms/' + roomName);
+        let myRole = null; // هل أنا X أم O
+        let gameState = [];
+        let currentPlayer = 'X';
+        let selectedIdx = null;
+
+        // الانضمام للغرفة
+        roomRef.once('value', snapshot => {
+            const data = snapshot.val();
+            if (!data) {
+                // أول لاعب يدخل يكون X
+                myRole = 'X';
+                resetGameData();
+            } else if (!data.playerO) {
+                // ثاني لاعب يدخل يكون O
+                myRole = 'O';
+                roomRef.update({ playerO: true });
+            } else {
+                alert("الغرفة ممتلئة! سيتم نقلك لغرفة جديدة.");
+                window.location.href = window.location.pathname;
+            }
+            document.getElementById('playerTag').innerText = "أنت تلعب بـ: " + myRole;
+        });
+
+        // الاستماع للتغييرات في الوقت الفعلي
+        roomRef.on('value', snapshot => {
+            const data = snapshot.val();
+            if (data) {
+                gameState = data.board;
+                currentPlayer = data.turn;
+                render();
+                updateStatus(data);
+            }
+        });
+
+        function resetGameData() {
+            roomRef.set({
+                board: [
+                    { p: 'X', moved: false }, { p: 'X', moved: false }, { p: 'X', moved: false },
+                    { p: null, moved: false }, { p: null, moved: false }, { p: null, moved: false },
+                    { p: 'O', moved: false }, { p: 'O', moved: false }, { p: 'O', moved: false }
+                ],
+                turn: 'X',
+                playerO: false,
+                winner: null
+            });
+        }
+
+        function render() {
+            const boardEl = document.getElementById('board');
+            boardEl.innerHTML = '';
+            gameState.forEach((cell, i) => {
+                const div = document.createElement('div');
+                div.className = 'cell';
+                if (cell.p) div.classList.add('player-' + cell.p.toLowerCase());
+                if (selectedIdx === i) div.classList.add('selected');
+                div.innerText = cell.p || '';
+                div.onclick = () => handleClick(i);
+                boardEl.appendChild(div);
+            });
+        }
+
+        function handleClick(i) {
+            if (currentPlayer !== myRole) return; // ليس دورك
+
+            if (gameState[i].p === myRole) {
+                selectedIdx = i;
+                render();
+            } else if (selectedIdx !== null && gameState[i].p === null) {
+                const newState = [...gameState];
+                newState[i] = { p: myRole, moved: true };
+                newState[selectedIdx] = { p: null, moved: false };
+                
+                const win = checkWin(newState, myRole);
+                const allMoved = newState.filter(c => c.p === myRole && c.moved).length === 3;
+
+                roomRef.update({
+                    board: newState,
+                    turn: myRole === 'X' ? 'O' : 'X',
+                    winner: (win && allMoved) ? myRole : null
+                });
+                selectedIdx = null;
+            }
+        }
+
+        function checkWin(state, player) {
+            const wins = [ [0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6] ];
+            return wins.some(w => w.every(idx => state[idx].p === player));
+        }
+
+        function updateStatus(data) {
+            const statusEl = document.getElementById('status');
+            if (data.winner) {
+                statusEl.innerText = "فاز اللاعب: " + data.winner + "! 🎉";
+            } else {
+                statusEl.innerText = (data.turn === myRole) ? "دورك الآن!" : "انتظر دور الخصم...";
+            }
+        }
+    </script>
+</body>
+</html>
